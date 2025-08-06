@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Crypto Alpha Scout - 控制台</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <!-- 修复: 更新Plotly.js到较新版本 -->
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #0a0a0a;
+            color: #fff;
+            overflow-x: hidden;
+        }
+        
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+            padding: 20px;
+        }
+        
+        .card {
+            background: #1a1a1a;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            border: 1px solid #333;
+        }
+        
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px;
+            background: #2a2a2a;
+            border-radius: 8px;
+            margin: 10px 0;
+            transition: all 0.3s ease;
+        }
+        
+        .metric:hover {
+            background: #3a3a3a;
+            transform: translateX(5px);
+        }
+        
+        .metric-value {
+            font-size: 28px;
+            font-weight: bold;
+            background: linear-gradient(45deg, #00d4ff, #00ff88);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .opportunities-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .opportunity {
+            background: #2a2a2a;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 10px 0;
+            border-left: 4px solid #00d4ff;
+        }
+        
+        .profit {
+            color: #00ff88;
+            font-size: 20px;
+            font-weight: bold;
+        }
+        
+        .chart-container {
+            height: 400px;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        
+        .live-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            background: #00ff88;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+            margin-right: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div class="dashboard">
+            <!-- 实时指标 -->
+            <div class="card">
+                <h2><span class="live-indicator"></span>实时指标</h2>
+                <div class="metric">
+                    <span>活跃Scout</span>
+                    <span class="metric-value">{{ metrics.activeScouts }}</span>
+                </div>
+                <div class="metric">
+                    <span>24小时机会</span>
+                    <span class="metric-value">{{ metrics.opportunities24h }}</span>
+                </div>
+                <div class="metric">
+                    <span>今日利润</span>
+                    <span class="metric-value">${{ metrics.todayProfit }}</span>
+                </div>
+                <div class="metric">
+                    <span>系统负载</span>
+                    <span class="metric-value">{{ metrics.cpuUsage }}%</span>
+                </div>
+            </div>
+            
+            <!-- 最新机会 -->
+            <div class="card">
+                <h2>最新机会</h2>
+                <div class="opportunities-list">
+                    <div v-for="opp in latestOpportunities" :key="opp.id" class="opportunity">
+                        <div>{{ opp.type }} - {{ opp.symbol }}</div>
+                        <div class="profit">+{{ opp.profit_pct.toFixed(2) }}%</div>
+                        <div>{{ opp.exchange1 }} → {{ opp.exchange2 }}</div>
+                        <small>{{ formatTime(opp.timestamp) }}</small>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 性能图表 -->
+            <div class="card">
+                <h2>Scout性能</h2>
+                <div id="performance-chart" class="chart-container"></div>
+            </div>
+            
+            <!-- 利润追踪 -->
+            <div class="card">
+                <h2>利润追踪</h2>
+                <div id="profit-chart" class="chart-container"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const { createApp } = Vue;
+        
+        createApp({
+            data() {
+                return {
+                    metrics: {
+                        activeScouts: 0,
+                        opportunities24h: 0,
+                        todayProfit: 0,
+                        cpuUsage: 0
+                    },
+                    latestOpportunities: [],
+                    ws: null
+                }
+            },
+            mounted() {
+                this.connectWebSocket();
+                this.initCharts();
+            },
+            methods: {
+                connectWebSocket() {
+                    try {
+                        // **修复: 动态生成WebSocket URL，并修正拼写错误**
+                        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                        const wsUrl = `${protocol}//${window.location.host}/ws`;
+                        console.log(`Connecting to WebSocket at ${wsUrl}`);
+                        this.ws = new WebSocket(wsUrl);
+                        
+                        this.ws.onmessage = (event) => {
+                            const data = JSON.parse(event.data);
+                            this.updateDashboard(data);
+                        };
+                        
+                        this.ws.onclose = () => {
+                            // 自动重连
+                            console.log('WebSocket closed. Reconnecting in 3 seconds...');
+                            setTimeout(() => this.connectWebSocket(), 3000);
+                        };
+
+                        this.ws.onerror = (error) => {
+                            console.error('WebSocket Error:', error);
+                        };
+                    } catch (error) {
+                        console.error("Failed to construct WebSocket:", error);
+                    }
+                },
+                
+                updateDashboard(data) {
+                    // 更新指标
+                    this.metrics = data.metrics;
+                    
+                    // 更新机会列表
+                    if (data.newOpportunity) {
+                        this.latestOpportunities.unshift(data.newOpportunity);
+                        if (this.latestOpportunities.length > 10) {
+                            this.latestOpportunities.pop();
+                        }
+                    }
+                    
+                    // 更新图表
+                    if (data.charts) {
+                        this.updateCharts(data.charts);
+                    }
+                },
+                
+                initCharts() {
+                    // 初始化性能图表
+                    Plotly.newPlot('performance-chart', [{
+                        x: [],
+                        y: [],
+                        type: 'scatter',
+                        mode: 'lines',
+                        name: 'CPU使用率',
+                        line: { color: '#00d4ff' }
+                    }], {
+                        title: '',
+                        paper_bgcolor: '#1a1a1a',
+                        plot_bgcolor: '#1a1a1a',
+                        font: { color: '#fff' },
+                        xaxis: { showgrid: false },
+                        yaxis: { showgrid: true, gridcolor: '#333' }
+                    });
+                    
+                    // 初始化利润图表
+                    Plotly.newPlot('profit-chart', [{
+                        x: [],
+                        y: [],
+                        type: 'bar',
+                        marker: { color: '#00ff88' }
+                    }], {
+                        title: '',
+                        paper_bgcolor: '#1a1a1a',
+                        plot_bgcolor: '#1a1a1a',
+                        font: { color: '#fff' },
+                        xaxis: { showgrid: false },
+                        yaxis: { showgrid: true, gridcolor: '#333' }
+                    });
+                },
+                
+                updateCharts(chartsData) {
+                    // 更新性能图表
+                    if (chartsData.performance) {
+                        Plotly.extendTraces('performance-chart', {
+                            x: [[new Date()]],
+                            y: [[chartsData.performance]]
+                        }, [0]);
+                    }
+                    
+                    // 更新利润图表
+                    if (chartsData.profit) {
+                        Plotly.update('profit-chart', {
+                            x: [chartsData.profit.labels],
+                            y: [chartsData.profit.values]
+                        });
+                    }
+                },
+                
+                formatTime(timestamp) {
+                    return new Date(timestamp).toLocaleTimeString('zh-CN');
+                }
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>

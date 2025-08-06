@@ -1,0 +1,72 @@
+# docker-compose.yml
+# 最终版本：包含应用、数据库和消息队列
+
+services:
+  # ----------------------------------------------------
+  # 1. RabbitMQ 消息队列服务 (保持不变)
+  # ----------------------------------------------------
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: crypto-scout-rabbitmq
+    hostname: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq/
+    environment:
+      - RABBITMQ_DEFAULT_USER=user
+      - RABBITMQ_DEFAULT_PASS=password
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # ----------------------------------------------------
+  # 2. TimescaleDB 数据库服务 (保持不变)
+  # ----------------------------------------------------
+  timescaledb:
+    image: timescale/timescaledb:latest-pg14
+    container_name: crypto-scout-timescaledb
+    hostname: timescaledb
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=crypto_scout
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d crypto_scout"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ----------------------------------------------------
+  # 3. 新增：我们的Python应用程序服务
+  # ----------------------------------------------------
+  app:
+    build: .  # 指示Docker从当前目录的Dockerfile构建镜像
+    container_name: crypto-scout-app
+    # 关键：设置依赖关系
+    # app服务会等待rabbitmq和timescaledb的healthcheck成功后才启动
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+    # 将本地代码挂载到容器中，这样修改代码无需重新构建镜像
+    volumes:
+      - .:/app
+    # 确保环境变量文件被容器使用
+    env_file:
+      - .env.example # 在生产环境中应使用 .env
+    # 确保容器崩溃后会自动重启
+    restart: unless-stopped
+
+volumes:
+  rabbitmq_data:
+  timescaledb_data:
+
